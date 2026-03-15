@@ -17,55 +17,64 @@ import (
 
 // ── Palette ──────────────────────────────────────────────────────────
 var (
-	colorAccent  = lipgloss.Color("4")  // blue  — current session
-	colorHeader  = lipgloss.Color("6")  // cyan  — chrome
-	colorText    = lipgloss.Color("7")  // light — primary text
-	colorMuted   = lipgloss.Color("8")  // gray  — secondary info
-	colorBright  = lipgloss.Color("15") // white — emphasis
-	colorNotif   = lipgloss.Color("3")  // yellow — needs attention
-	colorWorking = lipgloss.Color("6")  // cyan  — agent working
-	colorDone    = lipgloss.Color("2")  // green — task done
-	colorCursorB = lipgloss.Color("8")  // cursor background
+	colorAccent  = lipgloss.Color("#5f87d7") // soft blue
+	colorText    = lipgloss.Color("#c0c0c0") // light gray
+	colorMuted   = lipgloss.Color("#585858") // dim gray
+	colorBright  = lipgloss.Color("#e4e4e4") // near white
+	colorWaiting = lipgloss.Color("#d7875f") // warm amber — attention
+	colorWorking = lipgloss.Color("#5f87af") // steel blue — in progress
+	colorDone    = lipgloss.Color("#5faf5f") // soft green — complete
+	colorSep     = lipgloss.Color("#3a3a3a") // subtle separator
 )
 
 // ── Styles ───────────────────────────────────────────────────────────
 var (
-	cursorStyle = lipgloss.NewStyle().
-			Background(colorCursorB).
+	// Session name styles
+	sessionStyle = lipgloss.NewStyle().
 			Foreground(colorBright).
 			Bold(true)
 
-	cursorCurrentStyle = lipgloss.NewStyle().
-				Background(colorAccent).
-				Foreground(colorBright).
-				Bold(true)
-
-	currentStyle = lipgloss.NewStyle().
-			Foreground(colorAccent).
-			Bold(true)
-
-	normalStyle = lipgloss.NewStyle().
+	sessionDimStyle = lipgloss.NewStyle().
 			Foreground(colorText)
 
-	detailStyle = lipgloss.NewStyle().
-			Foreground(colorMuted)
-
-	statusAttentionStyle = lipgloss.NewStyle().
-				Foreground(colorNotif).
+	currentMarkerStyle = lipgloss.NewStyle().
+				Foreground(colorAccent).
 				Bold(true)
 
-	statusWorkingStyle = lipgloss.NewStyle().
-				Foreground(colorWorking)
+	// Cursor marker
+	cursorBarStyle = lipgloss.NewStyle().
+			Foreground(colorBright).
+			Bold(true)
 
-	statusDoneStyle = lipgloss.NewStyle().
+	// Detail text (paths, tree)
+	pathStyle = lipgloss.NewStyle().
+			Foreground(colorMuted)
+
+	// Status badges
+	waitingStyle = lipgloss.NewStyle().
+			Foreground(colorWaiting).
+			Bold(true)
+
+	workingStyle = lipgloss.NewStyle().
+			Foreground(colorWorking)
+
+	doneStyle = lipgloss.NewStyle().
 			Foreground(colorDone)
 
+	// Summary header
+	summaryStyle = lipgloss.NewStyle().
+			Foreground(colorMuted)
+
+	// Footer
 	footerKeyStyle = lipgloss.NewStyle().
-			Foreground(colorHeader).
-			Bold(true)
+			Foreground(colorAccent)
 
 	footerDescStyle = lipgloss.NewStyle().
 			Foreground(colorMuted)
+
+	// Separators
+	sepStyle = lipgloss.NewStyle().
+			Foreground(colorSep)
 
 	emptyStyle = lipgloss.NewStyle().
 			Foreground(colorMuted)
@@ -77,10 +86,10 @@ type sessionEntry struct {
 	session     tmux.Session
 	windows     []tmux.Window
 	notif       *notify.Notification
-	simple      bool            // collapsible to one line
-	path        string          // primary path for simple sessions
-	agentName   string          // detected agent name (e.g. "claude")
-	agentStatus tmux.AgentStatus // working, idle, or none
+	simple      bool
+	path        string
+	agentName   string
+	agentStatus tmux.AgentStatus
 }
 
 type Model struct {
@@ -91,8 +100,8 @@ type Model struct {
 	width          int
 	height         int
 	ready          bool
-	cmdMode        bool   // true when typing a : command
-	cmdBuf         string // command buffer after :
+	cmdMode        bool
+	cmdBuf         string
 }
 
 type tickMsg time.Time
@@ -140,7 +149,6 @@ func (m *Model) loadSessions() {
 	}
 }
 
-// classifyEntry determines if a session can be collapsed to one line.
 func classifyEntry(e *sessionEntry) {
 	if len(e.windows) != 1 {
 		e.simple = false
@@ -194,7 +202,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tickCmd()
 
 	case tea.KeyMsg:
-		// Command mode (:q, :qa, etc.)
 		if m.cmdMode {
 			switch msg.String() {
 			case "enter":
@@ -256,7 +263,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(m.entries) > 0 {
 				selected := m.entries[m.cursor].session.Name
 				tmux.SwitchClient(selected)
-				return m, tea.Quit // dismiss popup after switching
+				return m, tea.Quit
 			}
 
 		case key.Matches(msg, key.NewBinding(key.WithKeys("c"))):
@@ -277,9 +284,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // ── View ─────────────────────────────────────────────────────────────
 
-// chromeHeight is fixed to avoid circular rendering. footer(1) + gap(1) = 2
-// The summary line is part of the viewport content, so it doesn't add to chrome.
-const chromeHeight = 2
+const chromeHeight = 2 // footer + gap
 
 func (m Model) View() string {
 	if !m.ready {
@@ -295,52 +300,49 @@ func (m Model) View() string {
 
 func (m Model) renderFooter() string {
 	if m.cmdMode {
-		return " :" + m.cmdBuf + "█"
+		return " " + pathStyle.Render(":"+m.cmdBuf) + "█"
 	}
 	keys := []struct{ key, desc string }{
 		{"j/k", "navigate"},
-		{"enter", "switch"},
+		{"↵", "switch"},
 		{"c", "clear"},
 		{"esc", "close"},
 	}
 	var parts []string
 	for _, k := range keys {
 		parts = append(parts,
-			footerKeyStyle.Render(k.key)+" "+footerDescStyle.Render(k.desc))
+			footerKeyStyle.Render(k.key)+footerDescStyle.Render(" "+k.desc))
 	}
-	return " " + strings.Join(parts, detailStyle.Render("  "))
+	return " " + strings.Join(parts, footerDescStyle.Render("  "))
 }
 
 // ── Session list (viewport content) ─────────────────────────────────
 
 func (m Model) renderSessions() string {
 	if len(m.entries) == 0 {
-		return emptyStyle.Render("\n  No sessions running.\n")
+		return emptyStyle.Render("\n  No agents running.\n")
 	}
 
 	var b strings.Builder
 	w := m.contentWidth()
 
-	// Aggregate agent status summary
-	if summary := m.agentSummary(); summary != "" {
-		b.WriteString(" " + summary + "\n\n")
+	// ── Summary bar ──
+	summary := m.agentSummary()
+	if summary != "" {
+		b.WriteString(" " + summary)
+		b.WriteString("\n")
+		b.WriteString(" " + sepStyle.Render(strings.Repeat("─", w)))
+		b.WriteString("\n")
 	}
 
+	// ── Session entries ──
 	for idx, entry := range m.entries {
 		isCursor := idx == m.cursor
 		isCurrent := entry.session.Name == m.currentSession
-		isLast := idx == len(m.entries)-1
 
-		if entry.simple {
-			b.WriteString(m.renderSimpleSession(entry, isCursor, isCurrent, w))
-			b.WriteString("\n")
-		} else {
-			b.WriteString(m.renderSessionLine(entry.session.Name, isCursor, isCurrent, entry, "", w))
-			b.WriteString("\n")
-			b.WriteString(m.renderTree(entry))
-		}
+		b.WriteString(m.renderEntry(entry, isCursor, isCurrent, w))
 
-		if !isLast {
+		if idx < len(m.entries)-1 {
 			b.WriteString("\n")
 		}
 	}
@@ -348,165 +350,121 @@ func (m Model) renderSessions() string {
 	return b.String()
 }
 
-func (m Model) renderSimpleSession(entry sessionEntry, isCursor, isCurrent bool, w int) string {
-	suffix := entry.path
-	// Don't show agent name inline if we're already showing agent status in the badge
-	if entry.agentStatus == tmux.AgentNone && len(entry.windows) == 1 {
-		for _, p := range entry.windows[0].Panes {
-			if !tmux.IsShell(p.Command) {
-				suffix = entry.path + "  " + friendlyName(p)
-				break
+func (m Model) renderEntry(entry sessionEntry, isCursor, isCurrent bool, w int) string {
+	var b strings.Builder
+
+	name := entry.session.Name
+	badge := statusBadge(entry)
+
+	// ── Line 1: [marker] name [badge] ──
+	var marker string
+	if isCursor {
+		marker = cursorBarStyle.Render(" ❯ ")
+	} else if isCurrent {
+		marker = currentMarkerStyle.Render(" ◆ ")
+	} else {
+		marker = "   "
+	}
+
+	nameRendered := sessionDimStyle.Render(name)
+	if isCursor || isCurrent {
+		nameRendered = sessionStyle.Render(name)
+	}
+
+	line1 := marker + nameRendered
+	if badge != "" {
+		line1 += "  " + badge
+	}
+	b.WriteString(line1)
+	b.WriteString("\n")
+
+	// ── Line 2: path / tree info ──
+	if entry.simple {
+		detail := entry.path
+		if entry.agentStatus == tmux.AgentNone && len(entry.windows) == 1 {
+			for _, p := range entry.windows[0].Panes {
+				if !tmux.IsShell(p.Command) {
+					detail = entry.path + " · " + friendlyName(p)
+					break
+				}
+			}
+		}
+		b.WriteString(pathStyle.Render("     " + detail))
+		b.WriteString("\n")
+	} else {
+		// Expanded tree for complex sessions
+		for _, win := range entry.windows {
+			winPath := windowPath(win)
+			b.WriteString(pathStyle.Render("     " + winPath))
+			b.WriteString("\n")
+
+			nonShellPanes := filterNonShell(win.Panes)
+			for _, pane := range nonShellPanes {
+				b.WriteString(pathStyle.Render("       └ " + friendlyName(pane)))
+				b.WriteString("\n")
 			}
 		}
 	}
-	return m.renderSessionLine(entry.session.Name, isCursor, isCurrent, entry, suffix, w)
+
+	return b.String()
 }
 
-// statusBadge returns a styled status indicator for a session.
+// ── Status badges ───────────────────────────────────────────────────
+
 func statusBadge(entry sessionEntry) string {
-	// Priority: notification > live agent detection
+	// Working overrides stale "done" — the agent started a new task
+	if entry.agentStatus == tmux.AgentWorking {
+		// But "waiting" still wins — agent needs your input
+		if entry.notif != nil && entry.notif.Status == notify.StatusWaiting {
+			return waitingStyle.Render("● waiting ") + pathStyle.Render(entry.notif.TimeAgo())
+		}
+		return workingStyle.Render("⟳ working")
+	}
 	if entry.notif != nil {
 		ago := entry.notif.TimeAgo()
 		switch entry.notif.Status {
 		case notify.StatusWaiting:
-			return statusAttentionStyle.Render("● agent waiting ") + detailStyle.Render(ago)
+			return waitingStyle.Render("● waiting ") + pathStyle.Render(ago)
 		case notify.StatusDone:
-			return statusDoneStyle.Render("✓ agent done ") + detailStyle.Render(ago)
+			return doneStyle.Render("✓ done ") + pathStyle.Render(ago)
 		}
-	}
-	if entry.agentStatus == tmux.AgentWorking {
-		return statusWorkingStyle.Render("⟳ agent working")
 	}
 	return ""
 }
 
-func (m Model) renderSessionLine(name string, isCursor, isCurrent bool, entry sessionEntry, detail string, w int) string {
-	var prefix string
-	switch {
-	case isCursor && isCurrent:
-		prefix = "◆ "
-	case isCursor:
-		prefix = "▸ "
-	case isCurrent:
-		prefix = "◆ "
-	default:
-		prefix = "  "
-	}
-	label := prefix + name
-
-	detailSuffix := ""
-	if detail != "" {
-		detailSuffix = "  " + detail
-	}
-
-	badge := statusBadge(entry)
-
-	// Build content: label + detail + badge (always left-aligned together)
-	content := label + detailSuffix
-	if badge != "" {
-		content += "  " + badge
-	}
-
-	if isCursor {
-		style := cursorStyle
-		if isCurrent {
-			style = cursorCurrentStyle
-		}
-		// Pad to full width for the highlight bar, but badge stays with text
-		contentWidth := lipgloss.Width(content)
-		padding := w + 2 - contentWidth
-		if padding < 0 {
-			padding = 0
-		}
-		return style.Render(content + strings.Repeat(" ", padding))
-	}
-
-	var line string
-	if isCurrent {
-		line = currentStyle.Render(label)
-	} else {
-		line = normalStyle.Render(label)
-	}
-	if detailSuffix != "" {
-		line += detailStyle.Render(detailSuffix)
-	}
-	if badge != "" {
-		line += "  " + badge
-	}
-	return line
-}
-
-func (m Model) renderTree(entry sessionEntry) string {
-	var b strings.Builder
-
-	for wi, win := range entry.windows {
-		isLastWin := wi == len(entry.windows)-1 && entry.notif == nil
-
-		winConn := "├─"
-		if isLastWin {
-			winConn = "└─"
-		}
-		childPrefix := "│  "
-		if isLastWin {
-			childPrefix = "   "
-		}
-
-		winPath := windowPath(win)
-		b.WriteString(detailStyle.Render("    " + winConn + " " + winPath))
-		b.WriteString("\n")
-
-		// Show pane sub-tree only when there are multiple non-shell panes
-		nonShellPanes := filterNonShell(win.Panes)
-		if len(nonShellPanes) > 1 {
-			for pi, pane := range nonShellPanes {
-				paneConn := "├─"
-				if pi == len(nonShellPanes)-1 {
-					paneConn = "└─"
-				}
-				b.WriteString(detailStyle.Render(fmt.Sprintf("    %s %s %s", childPrefix, paneConn, friendlyName(pane))))
-				b.WriteString("\n")
-			}
-		} else if len(nonShellPanes) == 1 {
-			b.WriteString(detailStyle.Render(fmt.Sprintf("    %s └─ %s", childPrefix, friendlyName(nonShellPanes[0]))))
-			b.WriteString("\n")
-		}
-	}
-
-	return b.String()
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────
-
 func (m Model) agentSummary() string {
 	var working, waiting, done int
 	for _, e := range m.entries {
-		if e.notif != nil {
-			switch e.notif.Status {
-			case notify.StatusWaiting:
-				waiting++
-			case notify.StatusDone:
-				done++
-			}
-		} else if e.agentStatus == tmux.AgentWorking {
-			working++
+		isWorking := e.agentStatus == tmux.AgentWorking
+		hasNotif := e.notif != nil
+
+		switch {
+		case hasNotif && e.notif.Status == notify.StatusWaiting:
+			waiting++ // waiting always counts
+		case isWorking:
+			working++ // working overrides done
+		case hasNotif && e.notif.Status == notify.StatusDone:
+			done++
 		}
 	}
 
 	var parts []string
 	if waiting > 0 {
-		parts = append(parts, statusAttentionStyle.Render(fmt.Sprintf("%d waiting", waiting)))
+		parts = append(parts, waitingStyle.Render(fmt.Sprintf("● %d waiting", waiting)))
 	}
 	if working > 0 {
-		parts = append(parts, statusWorkingStyle.Render(fmt.Sprintf("%d working", working)))
+		parts = append(parts, workingStyle.Render(fmt.Sprintf("⟳ %d working", working)))
 	}
 	if done > 0 {
-		parts = append(parts, statusDoneStyle.Render(fmt.Sprintf("%d done", done)))
+		parts = append(parts, doneStyle.Render(fmt.Sprintf("✓ %d done", done)))
 	}
 	if len(parts) == 0 {
 		return ""
 	}
-	return strings.Join(parts, detailStyle.Render(" · "))
+	return strings.Join(parts, summaryStyle.Render("  "))
 }
+
+// ── Tree rendering ──────────────────────────────────────────────────
 
 func filterNonShell(panes []tmux.Pane) []tmux.Pane {
 	var result []tmux.Pane
@@ -537,6 +495,8 @@ func friendlyName(p tmux.Pane) string {
 	return p.Command
 }
 
+// ── Helpers ──────────────────────────────────────────────────────────
+
 func (m Model) contentWidth() int {
 	w := m.width - 2
 	if w < 10 {
@@ -564,13 +524,12 @@ func (m *Model) ensureCursorVisible() {
 
 func (m Model) entryHeight(e sessionEntry) int {
 	if e.simple {
-		return 1
+		return 2 // name + path
 	}
-	h := 1 // session line
+	h := 1 // name line
 	for _, w := range e.windows {
-		h++ // window line
-		nonShell := filterNonShell(w.Panes)
-		h += len(nonShell)
+		h++ // window path
+		h += len(filterNonShell(w.Panes))
 	}
 	return h
 }

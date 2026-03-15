@@ -42,8 +42,8 @@ func main() {
 			return togglePopup(width, height)
 		},
 	}
-	toggleCmd.Flags().StringP("width", "w", "50%", "Popup width (columns or percentage)")
-	toggleCmd.Flags().StringP("height", "H", "60%", "Popup height (rows or percentage)")
+	toggleCmd.Flags().StringP("width", "w", "45%", "Popup width (columns or percentage)")
+	toggleCmd.Flags().StringP("height", "H", "40%", "Popup height (rows or percentage)")
 
 	// tw notify --status waiting|done
 	notifyCmd := &cobra.Command{
@@ -142,8 +142,8 @@ func togglePopup(width, height string) error {
 		"-w", width,
 		"-h", height,
 		"-b", "rounded",
-		"-S", "fg=#555555",
-		"-T", " agents ",
+		"-S", "fg=#c0c0c0",
+		"-T", " ⬡ agents ",
 		"tw", "popup",
 	)
 	return err
