@@ -538,8 +538,7 @@ func (m Model) renderEntry(entry sessionEntry, isCursor, isCurrent bool, w int) 
 
 func (m Model) statusBadge(entry sessionEntry) string {
 	if entry.agentStatus == tmux.AgentWorking {
-		frame := pulseFrames[m.animFrame%len(pulseFrames)]
-		return workingStyle.Render(frame + " working")
+		return workingStyle.Render("⟳ working")
 	}
 	if entry.notif != nil {
 		ago := entry.notif.TimeAgo()
@@ -573,8 +572,7 @@ func (m Model) agentSummary() string {
 		parts = append(parts, waitingStyle.Render(fmt.Sprintf("● %d waiting", waiting)))
 	}
 	if working > 0 {
-		frame := pulseFrames[m.animFrame%len(pulseFrames)]
-		parts = append(parts, workingStyle.Render(fmt.Sprintf("%s %d working", frame, working)))
+		parts = append(parts, workingStyle.Render(fmt.Sprintf("⟳ %d working", working)))
 	}
 	if done > 0 {
 		parts = append(parts, doneStyle.Render(fmt.Sprintf("✓ %d done", done)))
