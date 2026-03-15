@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -25,6 +24,8 @@ func main() {
 		Use:   "sidebar",
 		Short: "Open the interactive workspace sidebar",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Tag this pane so tw toggle can find it
+			tmux.Run("select-pane", "-T", sidebarTitle)
 			m := ui.NewModel()
 			p := tea.NewProgram(m, tea.WithAltScreen())
 			_, err := p.Run()
@@ -102,27 +103,42 @@ func main() {
 	}
 }
 
+const sidebarTitle = "tw-sidebar"
+
 func toggleSidebar(width int) error {
-	// Check if sidebar pane exists
-	out, err := tmux.Run("list-panes", "-F", "#{pane_id}|#{pane_pid}")
+	// Look for sidebar in the current window
+	out, err := tmux.Run("list-panes", "-F", "#{pane_id}|#{pane_title}|#{pane_width}")
 	if err != nil {
 		return err
 	}
 
+	var largestPane string
+	var largestWidth int
+
 	for _, line := range strings.Split(out, "\n") {
-		parts := strings.SplitN(line, "|", 2)
-		if len(parts) != 2 {
+		parts := strings.SplitN(line, "|", 3)
+		if len(parts) != 3 {
 			continue
 		}
-		paneID, panePID := parts[0], parts[1]
-
-		// Check if this pane is running tw sidebar
-		checkCmd := exec.Command("pgrep", "-P", panePID, "-f", "tw sidebar")
-		if checkCmd.Run() == nil {
+		paneID, title := parts[0], parts[1]
+		if title == sidebarTitle {
 			return tmux.KillPane(paneID)
+		}
+		// Track largest pane to split from
+		w := 0
+		fmt.Sscanf(parts[2], "%d", &w)
+		if w > largestWidth {
+			largestWidth = w
+			largestPane = paneID
 		}
 	}
 
-	// No sidebar found — create one
-	return tmux.SplitWindow("-hb", "-l", fmt.Sprintf("%d", width), "tw", "sidebar")
+	// No sidebar in this window — create one, splitting from the largest pane.
+	// The sidebar command sets its own pane title on startup.
+	args := []string{"-hb", "-l", fmt.Sprintf("%d", width)}
+	if largestPane != "" {
+		args = append(args, "-t", largestPane)
+	}
+	args = append(args, "tw", "sidebar")
+	return tmux.SplitWindow(args...)
 }

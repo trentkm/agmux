@@ -13,11 +13,18 @@ type Session struct {
 }
 
 type Window struct {
+	Index  int
+	Name   string
+	Active bool
+	Panes  []Pane
+}
+
+type Pane struct {
 	Index   int
-	Name    string
-	Active  bool
 	Command string
 	Path    string
+	Title   string
+	Active  bool
 }
 
 func Run(args ...string) (string, error) {
@@ -35,6 +42,33 @@ func CurrentSession() string {
 		return ""
 	}
 	return out
+}
+
+// ClientSession returns the session the most recently active client is viewing.
+// This differs from CurrentSession() when the sidebar pane belongs to a
+// different session than the one the user is looking at (after switch-client).
+func ClientSession() string {
+	out, err := Run("list-clients", "-F", "#{client_activity}|#{client_session}")
+	if err != nil {
+		return CurrentSession()
+	}
+	// Find most recently active client
+	var bestSession string
+	var bestActivity string
+	for _, line := range strings.Split(out, "\n") {
+		parts := strings.SplitN(line, "|", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		if parts[0] > bestActivity {
+			bestActivity = parts[0]
+			bestSession = parts[1]
+		}
+	}
+	if bestSession == "" {
+		return CurrentSession()
+	}
+	return bestSession
 }
 
 func ListSessions() ([]Session, error) {
@@ -63,30 +97,51 @@ func ListSessions() ([]Session, error) {
 	return sessions, nil
 }
 
-func ListWindows(session string) ([]Window, error) {
-	out, err := Run("list-windows", "-t", session, "-F",
-		"#{window_index}|#{window_name}|#{window_active}|#{pane_current_command}|#{pane_current_path}")
+// ListWindowsWithPanes returns all windows for a session, each with their panes.
+func ListWindowsWithPanes(session string) ([]Window, error) {
+	out, err := Run("list-panes", "-t", session, "-F",
+		"#{window_index}|#{window_name}|#{window_active}|#{pane_index}|#{pane_current_command}|#{pane_current_path}|#{pane_title}|#{pane_active}")
 	if err != nil {
 		return nil, err
 	}
 
-	var windows []Window
+	windowMap := make(map[int]*Window)
+	var windowOrder []int
+
 	for _, line := range strings.Split(out, "\n") {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "|", 5)
-		if len(parts) != 5 {
+		parts := strings.SplitN(line, "|", 8)
+		if len(parts) != 8 {
 			continue
 		}
-		idx, _ := strconv.Atoi(parts[0])
-		windows = append(windows, Window{
-			Index:   idx,
-			Name:    parts[1],
-			Active:  parts[2] == "1",
-			Command: parts[3],
-			Path:    parts[4],
+		winIdx, _ := strconv.Atoi(parts[0])
+		paneIdx, _ := strconv.Atoi(parts[3])
+
+		w, ok := windowMap[winIdx]
+		if !ok {
+			w = &Window{
+				Index:  winIdx,
+				Name:   parts[1],
+				Active: parts[2] == "1",
+			}
+			windowMap[winIdx] = w
+			windowOrder = append(windowOrder, winIdx)
+		}
+
+		w.Panes = append(w.Panes, Pane{
+			Index:   paneIdx,
+			Command: parts[4],
+			Path:    parts[5],
+			Title:   parts[6],
+			Active:  parts[7] == "1",
 		})
+	}
+
+	var windows []Window
+	for _, idx := range windowOrder {
+		windows = append(windows, *windowMap[idx])
 	}
 	return windows, nil
 }
@@ -105,4 +160,13 @@ func SplitWindow(args ...string) error {
 func KillPane(paneID string) error {
 	_, err := Run("kill-pane", "-t", paneID)
 	return err
+}
+
+// IsShell returns true if the command is a common shell.
+func IsShell(cmd string) bool {
+	switch cmd {
+	case "fish", "bash", "zsh", "sh", "dash", "tcsh", "csh":
+		return true
+	}
+	return false
 }
