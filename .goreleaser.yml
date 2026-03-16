@@ -1,0 +1,44 @@
+version: 2
+
+project_name: agmux
+
+builds:
+  - main: .
+    binary: agmux
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+
+homebrew_casks:
+  - name: agmux
+    binaries:
+      - agmux
+    repository:
+      owner: trentkm
+      name: homebrew-tap
+    directory: Casks
+    homepage: "https://github.com/trentkm/agmux"
+    description: "Agent orchestration for tmux — manage AI coding agents across sessions"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
