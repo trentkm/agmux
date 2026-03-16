@@ -22,6 +22,7 @@ type Notification struct {
 	Session   string
 	Status    Status
 	Timestamp time.Time
+	Cwd       string // optional: working directory of the process that sent the notification
 }
 
 func stateDir() string {
@@ -33,7 +34,11 @@ func stateDir() string {
 
 func Add(session string, status Status) error {
 	ts := time.Now().Unix()
-	data := fmt.Sprintf("%d|%s", ts, status)
+	cwd, _ := os.Getwd()
+	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
+		cwd = resolved
+	}
+	data := fmt.Sprintf("%d|%s|%s", ts, status, cwd)
 	path := filepath.Join(stateDir(), session+".notify")
 	if err := os.WriteFile(path, []byte(data), 0644); err != nil {
 		return err
@@ -93,16 +98,20 @@ func Get(session string) *Notification {
 	if err != nil {
 		return nil
 	}
-	parts := strings.SplitN(strings.TrimSpace(string(data)), "|", 2)
-	if len(parts) != 2 {
+	parts := strings.SplitN(strings.TrimSpace(string(data)), "|", 3)
+	if len(parts) < 2 {
 		return nil
 	}
 	ts, _ := strconv.ParseInt(parts[0], 10, 64)
-	return &Notification{
+	n := &Notification{
 		Session:   session,
 		Status:    Status(parts[1]),
 		Timestamp: time.Unix(ts, 0),
 	}
+	if len(parts) == 3 {
+		n.Cwd = parts[2]
+	}
+	return n
 }
 
 func Count() int {

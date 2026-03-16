@@ -104,6 +104,11 @@ Add hooks to a [custom agent config](https://kiro.dev/docs/cli/custom-agents/con
 {
   "name": "default",
   "hooks": {
+    "agentSpawn": [
+      {
+        "command": "agmux notify --status done"
+      }
+    ],
     "userPromptSubmit": [
       {
         "command": "agmux notify --status working"
@@ -117,6 +122,10 @@ Add hooks to a [custom agent config](https://kiro.dev/docs/cli/custom-agents/con
   }
 }
 ```
+
+- **`agentSpawn`** — fires when Kiro starts. Registers the session in agmux immediately.
+- **`userPromptSubmit`** — fires when you send a prompt. Shows "working" status.
+- **`stop`** — fires when Kiro finishes its response. Shows "done" status.
 
 Then start Kiro CLI with: `kiro-cli chat --agent default`
 

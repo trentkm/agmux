@@ -3,6 +3,7 @@ package tmux
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -162,6 +163,9 @@ func SessionForCwd() string {
 	dir, err := os.Getwd()
 	if err != nil {
 		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
 	}
 
 	out, err := Run("list-panes", "-a", "-F", "#{pane_current_path}|#{session_name}")

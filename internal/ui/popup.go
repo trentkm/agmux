@@ -145,7 +145,7 @@ func tickCmd() tea.Cmd {
 }
 
 func animCmd() tea.Cmd {
-	return tea.Tick(300*time.Millisecond, func(t time.Time) tea.Msg {
+	return tea.Tick(150*time.Millisecond, func(t time.Time) tea.Msg {
 		return animMsg(t)
 	})
 }
@@ -629,14 +629,21 @@ func (m Model) renderPaneDetail(p tmux.Pane, entry *sessionEntry, showConnector 
 	var indicator string
 	frame := pulseFrames[m.animFrame%len(pulseFrames)]
 
-	// Pane-level: spinner for working pane, green dot for idle agents
+	// Pane-level: use spinner detection OR notify status
+	// Only apply notify status to the pane whose path matches the notify cwd
+	notifMatchesPane := entry.notif != nil && (entry.notif.Cwd == "" || entry.notif.Cwd == p.Path)
+	notifWorking := notifMatchesPane && entry.notif.Status == notify.StatusWorking
+	notifWaiting := notifMatchesPane && entry.notif.Status == notify.StatusWaiting
+	notifDone := notifMatchesPane && entry.notif.Status == notify.StatusDone
+
 	switch {
-	case paneStatus == tmux.AgentWorking:
+	case paneStatus == tmux.AgentWorking || notifWorking:
 		indicator = workingStyle.Render(frame) + pathStyle.Render(" "+agentName+"  "+panePath)
-	case entry.notif != nil && entry.notif.Status == notify.StatusWaiting:
+	case notifWaiting:
 		indicator = waitingStyle.Render("●") + pathStyle.Render(" "+agentName+"  "+panePath)
+	case notifDone:
+		indicator = doneStyle.Render("·") + pathStyle.Render(" "+agentName+"  "+panePath)
 	default:
-		// Idle or done — green dot for detected agents, gray for unknown
 		if agentName != "" {
 			indicator = doneStyle.Render("·") + pathStyle.Render(" "+agentName+"  "+panePath)
 		} else {
