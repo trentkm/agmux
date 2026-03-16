@@ -184,7 +184,19 @@ func main() {
 		},
 	}
 
-	rootCmd.AddCommand(popupCmd, toggleCmd, notifyCmd, clearCmd, statusCmd, switchCmd)
+	// agmux init
+	initCmd := &cobra.Command{
+		Use:   "init",
+		Short: "Setup wizard — configure hooks for your agents",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			m := ui.NewInitModel()
+			p := tea.NewProgram(m)
+			_, err := p.Run()
+			return err
+		},
+	}
+
+	rootCmd.AddCommand(popupCmd, toggleCmd, notifyCmd, clearCmd, statusCmd, switchCmd, initCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
