@@ -4,6 +4,8 @@ Agent orchestration for tmux. Manage AI coding agents across sessions with a pop
 
 Works with Claude Code, Codex, Kiro, Aider, Goose, or any CLI agent.
 
+![agmux demo](demo.gif)
+
 ## Install
 
 ```bash
