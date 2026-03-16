@@ -638,7 +638,7 @@ func (m Model) renderPaneDetail(p tmux.Pane, entry *sessionEntry, showConnector 
 	case entry.notif != nil && entry.notif.Status == notify.StatusWaiting:
 		indicator = waitingStyle.Render("●") + pathStyle.Render(" "+agentName+"  "+panePath)
 	case entry.notif != nil && entry.notif.Status == notify.StatusDone:
-		indicator = doneStyle.Render("✓") + pathStyle.Render(" "+agentName+"  "+panePath)
+		indicator = doneStyle.Render("·") + pathStyle.Render(" "+agentName+"  "+panePath)
 	default:
 		indicator = pathStyle.Render("· "+agentName+"  "+panePath)
 	}
