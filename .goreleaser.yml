@@ -21,16 +21,17 @@ archives:
       - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
 
-homebrew_casks:
+brews:
   - name: agmux
-    binaries:
-      - agmux
     repository:
       owner: trentkm
       name: homebrew-tap
-    directory: Casks
+    directory: Formula
     homepage: "https://github.com/trentkm/agmux"
     description: "Agent orchestration for tmux — manage AI coding agents across sessions"
+    license: "MIT"
+    install: |
+      bin.install "agmux"
 
 checksum:
   name_template: "checksums.txt"
