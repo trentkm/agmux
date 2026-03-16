@@ -98,15 +98,29 @@ Add to `~/.claude/settings.json`:
 
 #### Kiro CLI
 
-Add hooks to your Kiro agent configuration:
+Add hooks to a [custom agent config](https://kiro.dev/docs/cli/custom-agents/configuration-reference#hooks-field). Create or edit `~/.kiro/agents/default.json`:
 
-```yaml
-hooks:
-  - event: UserPromptSubmit
-    command: agmux notify --status working
-  - event: Stop
-    command: agmux notify --status done
+```json
+{
+  "name": "default",
+  "hooks": {
+    "userPromptSubmit": [
+      {
+        "command": "agmux notify --status working"
+      }
+    ],
+    "stop": [
+      {
+        "command": "agmux notify --status done"
+      }
+    ]
+  }
+}
 ```
+
+Then start Kiro CLI with: `kiro-cli chat --agent default`
+
+Or add the `hooks` block to any existing agent config you already use.
 
 #### Other agents
 

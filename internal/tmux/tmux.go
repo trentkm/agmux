@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -25,6 +26,7 @@ type Pane struct {
 	Path    string
 	Title   string
 	Active  bool
+	Pid     int
 }
 
 func Run(args ...string) (string, error) {
@@ -38,10 +40,17 @@ func Run(args ...string) (string, error) {
 
 func CurrentSession() string {
 	out, err := Run("display-message", "-p", "#S")
-	if err != nil {
-		return ""
+	if err == nil && out != "" {
+		return out
 	}
-	return out
+	// Fallback: use TMUX_PANE env var to target the correct pane
+	if pane := os.Getenv("TMUX_PANE"); pane != "" {
+		out, err = Run("display-message", "-t", pane, "-p", "#S")
+		if err == nil && out != "" {
+			return out
+		}
+	}
+	return ""
 }
 
 // ClientSession returns the session the most recently active client is viewing.
@@ -100,7 +109,7 @@ func ListSessions() ([]Session, error) {
 // ListWindowsWithPanes returns all windows for a session, each with their panes.
 func ListWindowsWithPanes(session string) ([]Window, error) {
 	out, err := Run("list-panes", "-s", "-t", session, "-F",
-		"#{window_index}|#{window_name}|#{window_active}|#{pane_index}|#{pane_current_command}|#{pane_current_path}|#{pane_title}|#{pane_active}")
+		"#{window_index}|#{window_name}|#{window_active}|#{pane_index}|#{pane_current_command}|#{pane_current_path}|#{pane_title}|#{pane_active}|#{pane_pid}")
 	if err != nil {
 		return nil, err
 	}
@@ -112,12 +121,13 @@ func ListWindowsWithPanes(session string) ([]Window, error) {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "|", 8)
-		if len(parts) != 8 {
+		parts := strings.SplitN(line, "|", 9)
+		if len(parts) != 9 {
 			continue
 		}
 		winIdx, _ := strconv.Atoi(parts[0])
 		paneIdx, _ := strconv.Atoi(parts[3])
+		panePid, _ := strconv.Atoi(parts[8])
 
 		w, ok := windowMap[winIdx]
 		if !ok {
@@ -136,6 +146,7 @@ func ListWindowsWithPanes(session string) ([]Window, error) {
 			Path:    parts[5],
 			Title:   parts[6],
 			Active:  parts[7] == "1",
+			Pid:     panePid,
 		})
 	}
 
@@ -144,6 +155,34 @@ func ListWindowsWithPanes(session string) ([]Window, error) {
 		windows = append(windows, *windowMap[idx])
 	}
 	return windows, nil
+}
+
+// SessionForCwd finds the tmux session whose pane path matches the given directory.
+func SessionForCwd() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+
+	out, err := Run("list-panes", "-a", "-F", "#{pane_current_path}|#{session_name}")
+	if err != nil {
+		return ""
+	}
+	// Exact match first
+	for _, line := range strings.Split(out, "\n") {
+		parts := strings.SplitN(line, "|", 2)
+		if len(parts) == 2 && parts[0] == dir {
+			return parts[1]
+		}
+	}
+	// Prefix match (cwd is a subdirectory of a pane path)
+	for _, line := range strings.Split(out, "\n") {
+		parts := strings.SplitN(line, "|", 2)
+		if len(parts) == 2 && parts[0] != "" && strings.HasPrefix(dir, parts[0]) {
+			return parts[1]
+		}
+	}
+	return ""
 }
 
 func SwitchClient(session string) error {
@@ -221,12 +260,92 @@ func DetectAgent(p Pane) (name string, status AgentStatus) {
 			return agent.name, AgentIdle
 		}
 	}
+	// If the pane looks like a shell, check if an agent is hiding in the
+	// process tree (e.g. kiro-cli spawns fish as its terminal layer).
+	if p.Pid > 0 && IsShell(p.Command) {
+		if agent := detectAgentInProcessTree(p.Pid); agent != "" {
+			return agent, AgentIdle
+		}
+	}
 	return "", AgentNone
+}
+
+// processTree caches a snapshot of the process table for the duration of one
+// refresh cycle. Call ResetProcessTree() before each batch of DetectAgent calls.
+var processTree map[int]processInfo
+var processChildren map[int][]int
+
+type processInfo struct {
+	ppid int
+	comm string
+}
+
+func ResetProcessTree() {
+	processTree = nil
+	processChildren = nil
+}
+
+func loadProcessTree() {
+	if processTree != nil {
+		return
+	}
+	processTree = make(map[int]processInfo)
+	processChildren = make(map[int][]int)
+	out, err := exec.Command("ps", "-eo", "pid,ppid,comm").Output()
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		pid, err1 := strconv.Atoi(fields[0])
+		ppid, err2 := strconv.Atoi(fields[1])
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		processTree[pid] = processInfo{ppid: ppid, comm: fields[2]}
+		processChildren[ppid] = append(processChildren[ppid], pid)
+	}
+}
+
+// detectAgentInProcessTree walks descendants of pid looking for a known agent.
+func detectAgentInProcessTree(pid int) string {
+	loadProcessTree()
+	// BFS from pid — only go 3 levels deep (fish → fish → kiro-cli)
+	queue := processChildren[pid]
+	visited := map[int]bool{pid: true}
+	depth := 0
+	for len(queue) > 0 && depth < 3 {
+		nextQueue := []int{}
+		for _, cur := range queue {
+			if visited[cur] {
+				continue
+			}
+			visited[cur] = true
+			info := processTree[cur]
+			comm := info.comm
+			if idx := strings.LastIndex(comm, "/"); idx >= 0 {
+				comm = comm[idx+1:]
+			}
+			for _, agent := range knownAgents {
+				if strings.Contains(comm, agent.pattern) {
+					return agent.name
+				}
+			}
+			nextQueue = append(nextQueue, processChildren[cur]...)
+		}
+		queue = nextQueue
+		depth++
+	}
+	return ""
 }
 
 // SessionAgentStatus returns the aggregate agent status for a session
 // by checking all panes. Working beats Idle.
 func SessionAgentStatus(windows []Window) (name string, status AgentStatus) {
+	ResetProcessTree()
 	for _, w := range windows {
 		for _, p := range w.Panes {
 			n, s := DetectAgent(p)

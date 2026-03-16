@@ -52,11 +52,14 @@ func main() {
 		Short: "Send a notification for the current tmux session",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			session, _ := cmd.Flags().GetString("session")
-			if session == "" {
+			if session == "" && os.Getenv("TMUX") != "" {
 				session = tmux.CurrentSession()
-				if session == "" {
-					session = "default"
-				}
+			}
+			if session == "" {
+				session = tmux.SessionForCwd()
+			}
+			if session == "" {
+				session = "default"
 			}
 			status, _ := cmd.Flags().GetString("status")
 			switch status {
@@ -97,6 +100,7 @@ func main() {
 		Short: "Status bar widget (for tmux status-right)",
 		Run: func(cmd *cobra.Command, args []string) {
 			sessions, _ := tmux.ListSessions()
+			tmux.ResetProcessTree()
 
 			type agentInfo struct {
 				name   string
@@ -223,7 +227,7 @@ func calcPopupHeight() int {
 		for _, w := range wins {
 			n := 0
 			for _, p := range w.Panes {
-				if !tmux.IsShell(p.Command) {
+				if name, _ := tmux.DetectAgent(p); name != "" {
 					n++
 				}
 			}

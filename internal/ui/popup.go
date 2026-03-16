@@ -90,6 +90,25 @@ type sessionEntry struct {
 	path        string
 	agentName   string
 	agentStatus tmux.AgentStatus
+	// paneAgents caches DetectAgent results keyed by pane index
+	paneAgents map[int]paneAgent
+}
+
+type paneAgent struct {
+	name   string
+	status tmux.AgentStatus
+}
+
+func (e *sessionEntry) detectPane(p tmux.Pane) (string, tmux.AgentStatus) {
+	if e.paneAgents == nil {
+		e.paneAgents = make(map[int]paneAgent)
+	}
+	if cached, ok := e.paneAgents[p.Pid]; ok {
+		return cached.name, cached.status
+	}
+	name, status := tmux.DetectAgent(p)
+	e.paneAgents[p.Pid] = paneAgent{name, status}
+	return name, status
 }
 
 type Model struct {
@@ -113,6 +132,12 @@ type Model struct {
 type tickMsg time.Time
 type animMsg time.Time
 
+// sessionsMsg carries async-loaded session data back to the event loop.
+type sessionsMsg struct {
+	entries        []sessionEntry
+	currentSession string
+}
+
 func tickCmd() tea.Cmd {
 	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
 		return tickMsg(t)
@@ -120,7 +145,7 @@ func tickCmd() tea.Cmd {
 }
 
 func animCmd() tea.Cmd {
-	return tea.Tick(150*time.Millisecond, func(t time.Time) tea.Msg {
+	return tea.Tick(300*time.Millisecond, func(t time.Time) tea.Msg {
 		return animMsg(t)
 	})
 }
@@ -131,6 +156,30 @@ func NewModel() Model {
 	}
 	m.loadSessions()
 	return m
+}
+
+// loadSessionsCmd returns a tea.Cmd that loads session data in the background.
+func loadSessionsCmd() tea.Msg {
+	sessions, err := tmux.ListSessions()
+	if err != nil {
+		return sessionsMsg{}
+	}
+	current := tmux.ClientSession()
+	entries := make([]sessionEntry, 0, len(sessions))
+	for _, s := range sessions {
+		wins, _ := tmux.ListWindowsWithPanes(s.Name)
+		agentName, agentStatus := tmux.SessionAgentStatus(wins)
+		entry := sessionEntry{
+			session:     s,
+			windows:     wins,
+			notif:       notify.Get(s.Name),
+			agentName:   agentName,
+			agentStatus: agentStatus,
+		}
+		classifyEntry(&entry)
+		entries = append(entries, entry)
+	}
+	return sessionsMsg{entries: entries, currentSession: current}
 }
 
 func (m *Model) loadSessions() {
@@ -183,22 +232,19 @@ func (m *Model) applyFilter() {
 }
 
 func classifyEntry(e *sessionEntry) {
-	// Always set a path from the first window's active pane
 	if len(e.windows) > 0 {
 		e.path = tildefy(windowPath(e.windows[0]))
 	}
 
-	// Count total agent panes across all windows
 	agentCount := 0
 	for _, w := range e.windows {
 		for _, p := range w.Panes {
-			if !tmux.IsShell(p.Command) {
+			if name, _ := e.detectPane(p); name != "" {
 				agentCount++
 			}
 		}
 	}
 
-	// Simple = no agents or just one agent (render as 2 lines max)
 	e.simple = agentCount <= 1
 }
 
@@ -206,7 +252,7 @@ func classifyEntry(e *sessionEntry) {
 var pulseFrames = []string{"░", "▒", "▓", "█", "▓", "▒", "░", " "}
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(tickCmd(), animCmd())
+	return tea.Batch(loadSessionsCmd, animCmd())
 }
 
 // ── Update ───────────────────────────────────────────────────────────
@@ -230,16 +276,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.SetContent(m.renderSessions())
 		return m, nil
 
-	case tickMsg:
-		m.loadSessions()
+	case sessionsMsg:
+		m.entries = msg.entries
+		m.currentSession = msg.currentSession
+		m.applyFilter()
 		if m.ready {
 			m.viewport.SetContent(m.renderSessions())
 		}
-		return m, tickCmd()
+		// Schedule next refresh
+		return m, tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+			return tickMsg(t)
+		})
+
+	case tickMsg:
+		// Kick off async load — doesn't block the event loop
+		return m, loadSessionsCmd
 
 	case animMsg:
 		m.animFrame = (m.animFrame + 1) % len(pulseFrames)
-		if m.ready {
+		if m.ready && m.hasWorkingAgent() {
 			m.viewport.SetContent(m.renderSessions())
 		}
 		return m, animCmd()
@@ -354,25 +409,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, key.NewBinding(key.WithKeys("j", "down"))):
 			if m.cursor < len(m.filtered)-1 {
 				m.cursor++
-				m.viewport.SetContent(m.renderSessions())
-				m.ensureCursorVisible()
+				m.updateView()
 			}
 
 		case key.Matches(msg, key.NewBinding(key.WithKeys("k", "up"))):
 			if m.cursor > 0 {
 				m.cursor--
-				m.viewport.SetContent(m.renderSessions())
-				m.ensureCursorVisible()
+				m.updateView()
 			}
 
 		case key.Matches(msg, key.NewBinding(key.WithKeys("G"))):
 			m.cursor = len(m.filtered) - 1
-			m.viewport.SetContent(m.renderSessions())
+			m.updateView()
 			m.viewport.GotoBottom()
 
 		case key.Matches(msg, key.NewBinding(key.WithKeys("g"))):
 			m.cursor = 0
-			m.viewport.SetContent(m.renderSessions())
+			m.updateView()
 			m.viewport.GotoTop()
 
 		case key.Matches(msg, key.NewBinding(key.WithKeys("enter"))):
@@ -468,7 +521,7 @@ func (m Model) renderSessions() string {
 		b.WriteString(emptyStyle.Render("\n  No matching sessions.\n"))
 	}
 	for fi, idx := range m.filtered {
-		entry := m.entries[idx]
+		entry := &m.entries[idx]
 		isCursor := fi == m.cursor
 		isCurrent := entry.session.Name == m.currentSession
 
@@ -482,11 +535,11 @@ func (m Model) renderSessions() string {
 	return b.String()
 }
 
-func (m Model) renderEntry(entry sessionEntry, isCursor, isCurrent bool, w int) string {
+func (m Model) renderEntry(entry *sessionEntry, isCursor, isCurrent bool, w int) string {
 	highlightBg := lipgloss.Color("#333333")
 
 	name := entry.session.Name
-	badge := m.statusBadge(entry)
+	badge := m.statusBadge(*entry)
 
 	// ── Line 1: [marker] name [badge] ──
 	var marker string
@@ -518,7 +571,7 @@ func (m Model) renderEntry(entry sessionEntry, isCursor, isCurrent bool, w int) 
 	for _, win := range entry.windows {
 		hasAgent := false
 		for _, p := range win.Panes {
-			if !tmux.IsShell(p.Command) {
+			if name, status := entry.detectPane(p); name != "" && status != tmux.AgentNone {
 				allAgents = append(allAgents, agentPane{p, win.Index})
 				hasAgent = true
 			}
@@ -566,9 +619,9 @@ func (m Model) renderEntry(entry sessionEntry, isCursor, isCurrent bool, w int) 
 }
 
 // renderPaneDetail renders a single agent pane line with status indicator.
-func (m Model) renderPaneDetail(p tmux.Pane, entry sessionEntry, showConnector bool, prefix, winTag string) string {
+func (m Model) renderPaneDetail(p tmux.Pane, entry *sessionEntry, showConnector bool, prefix, winTag string) string {
 	panePath := tildefy(p.Path)
-	agentName, paneStatus := tmux.DetectAgent(p)
+	agentName, paneStatus := entry.detectPane(p)
 	if agentName == "" {
 		agentName = friendlyName(p)
 	}
@@ -576,13 +629,16 @@ func (m Model) renderPaneDetail(p tmux.Pane, entry sessionEntry, showConnector b
 	var indicator string
 	frame := pulseFrames[m.animFrame%len(pulseFrames)]
 
-	// Pane-level: use spinner detection only (not session notification)
-	// Session notification (working/waiting/done) shows on the session badge
+	// Determine effective status: live spinner detection first, then notify state
 	switch {
 	case paneStatus == tmux.AgentWorking:
 		indicator = workingStyle.Render(frame) + pathStyle.Render(" "+agentName+"  "+panePath)
-	case paneStatus == tmux.AgentIdle:
-		indicator = pathStyle.Render("· "+agentName+"  "+panePath)
+	case entry.notif != nil && entry.notif.Status == notify.StatusWorking:
+		indicator = workingStyle.Render(frame) + pathStyle.Render(" "+agentName+"  "+panePath)
+	case entry.notif != nil && entry.notif.Status == notify.StatusWaiting:
+		indicator = waitingStyle.Render("●") + pathStyle.Render(" "+agentName+"  "+panePath)
+	case entry.notif != nil && entry.notif.Status == notify.StatusDone:
+		indicator = doneStyle.Render("✓") + pathStyle.Render(" "+agentName+"  "+panePath)
 	default:
 		indicator = pathStyle.Render("· "+agentName+"  "+panePath)
 	}
@@ -700,12 +756,29 @@ func friendlyName(p tmux.Pane) string {
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
+func (m *Model) updateView() {
+	m.viewport.SetContent(m.renderSessions())
+	m.ensureCursorVisible()
+}
+
 func (m Model) contentWidth() int {
 	w := m.width - 2
 	if w < 10 {
 		w = 20
 	}
 	return w
+}
+
+func (m Model) hasWorkingAgent() bool {
+	for _, e := range m.entries {
+		if e.agentStatus == tmux.AgentWorking {
+			return true
+		}
+		if e.notif != nil && e.notif.Status == notify.StatusWorking {
+			return true
+		}
+	}
+	return false
 }
 
 // selectedEntry returns the entry under the cursor, or nil if nothing is selected.
@@ -719,7 +792,7 @@ func (m Model) selectedEntry() *sessionEntry {
 func (m *Model) ensureCursorVisible() {
 	line := 0
 	for i := 0; i < m.cursor && i < len(m.filtered); i++ {
-		line += m.entryHeight(m.entries[m.filtered[i]])
+		line += m.entryHeight(&m.entries[m.filtered[i]])
 		line++ // blank separator
 	}
 
@@ -729,15 +802,19 @@ func (m *Model) ensureCursorVisible() {
 	if line < vpTop {
 		m.viewport.SetYOffset(line)
 	} else if line >= vpBottom {
-		m.viewport.SetYOffset(line - m.viewport.Height + m.entryHeight(m.entries[m.cursor]))
+		m.viewport.SetYOffset(line - m.viewport.Height + m.entryHeight(&m.entries[m.cursor]))
 	}
 }
 
-func (m Model) entryHeight(e sessionEntry) int {
+func (m Model) entryHeight(e *sessionEntry) int {
 	h := 1 // session name line
 	totalAgents := 0
 	for _, w := range e.windows {
-		totalAgents += len(filterNonShell(w.Panes))
+		for _, p := range w.Panes {
+			if name, _ := tmux.DetectAgent(p); name != "" {
+				totalAgents++
+			}
+		}
 	}
 	if totalAgents <= 1 {
 		h++ // compact single line
