@@ -103,20 +103,27 @@ Add hooks to a [custom agent config](https://kiro.dev/docs/cli/custom-agents/con
 ```json
 {
   "name": "default",
+  "description": "Default agent with agmux notification hooks",
   "hooks": {
     "agentSpawn": [
       {
-        "command": "agmux notify --status done"
+        "command": "agmux notify --status done 2>/dev/null",
+        "description": "Register with agmux as soon as Kiro starts",
+        "timeout_ms": 5000
       }
     ],
     "userPromptSubmit": [
       {
-        "command": "agmux notify --status working"
+        "command": "agmux notify --status working 2>/dev/null",
+        "description": "Notify agmux that Kiro is working",
+        "timeout_ms": 5000
       }
     ],
     "stop": [
       {
-        "command": "agmux notify --status done"
+        "command": "agmux notify --status done 2>/dev/null",
+        "description": "Notify agmux that Kiro finished its turn",
+        "timeout_ms": 5000
       }
     ]
   }
@@ -126,6 +133,8 @@ Add hooks to a [custom agent config](https://kiro.dev/docs/cli/custom-agents/con
 - **`agentSpawn`** — fires when Kiro starts. Registers the session in agmux immediately.
 - **`userPromptSubmit`** — fires when you send a prompt. Shows "working" status.
 - **`stop`** — fires when Kiro finishes its response. Shows "done" status.
+
+The `2>/dev/null` suppresses errors if agmux isn't installed. The `timeout_ms` prevents hooks from blocking Kiro if tmux is unresponsive.
 
 Then start Kiro CLI with: `kiro-cli chat --agent default`
 
