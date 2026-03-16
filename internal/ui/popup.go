@@ -443,7 +443,7 @@ func (m Model) renderSessions() string {
 }
 
 func (m Model) renderEntry(entry sessionEntry, isCursor, isCurrent bool, w int) string {
-	var b strings.Builder
+	highlightBg := lipgloss.Color("#333333")
 
 	name := entry.session.Name
 	badge := m.statusBadge(entry)
@@ -467,10 +467,8 @@ func (m Model) renderEntry(entry sessionEntry, isCursor, isCurrent bool, w int) 
 	if badge != "" {
 		line1 += "  " + badge
 	}
-	b.WriteString(line1)
-	b.WriteString("\n")
 
-	// ── Detail lines: flat agent list with optional window tags ──
+	// ── Detail lines ──
 	type agentPane struct {
 		pane   tmux.Pane
 		winIdx int
@@ -491,47 +489,80 @@ func (m Model) renderEntry(entry sessionEntry, isCursor, isCurrent bool, w int) 
 	}
 	showWindowTag := windowsWithAgents > 1
 
+	var detailLines []string
 	if len(allAgents) == 0 {
-		b.WriteString(pathStyle.Render("     " + entry.path))
-		b.WriteString("\n")
+		detailLines = append(detailLines, pathStyle.Render("     "+entry.path))
 	} else if len(allAgents) == 1 {
 		p := allAgents[0].pane
-		panePath := tildefy(p.Path)
-		_, paneStatus := tmux.DetectAgent(p)
-		var indicator string
-		frame := pulseFrames[m.animFrame%len(pulseFrames)]
-		switch paneStatus {
-		case tmux.AgentWorking:
-			indicator = workingStyle.Render(frame+" ") + pathStyle.Render(friendlyName(p))
-		default:
-			indicator = pathStyle.Render(friendlyName(p))
-		}
-		b.WriteString(pathStyle.Render("     "+panePath+"  ") + indicator)
-		b.WriteString("\n")
+		detailLines = append(detailLines, m.renderPaneDetail(p, entry, false, "     ", ""))
 	} else {
 		for _, ap := range allAgents {
-			panePath := tildefy(ap.pane.Path)
-			_, paneStatus := tmux.DetectAgent(ap.pane)
-			var indicator string
-			frame := pulseFrames[m.animFrame%len(pulseFrames)]
-			switch paneStatus {
-			case tmux.AgentWorking:
-				indicator = workingStyle.Render(frame) + pathStyle.Render(" "+friendlyName(ap.pane)+"  "+panePath)
-			case tmux.AgentIdle:
-				indicator = pathStyle.Render("· "+friendlyName(ap.pane)+"  "+panePath)
-			default:
-				indicator = pathStyle.Render("  "+friendlyName(ap.pane)+"  "+panePath)
-			}
 			winTag := ""
 			if showWindowTag {
-				winTag = pathStyle.Render(fmt.Sprintf("  w%d", ap.winIdx))
+				winTag = fmt.Sprintf("  w%d", ap.winIdx)
 			}
-			b.WriteString(pathStyle.Render("     └ ") + indicator + winTag)
-			b.WriteString("\n")
+			detailLines = append(detailLines, m.renderPaneDetail(ap.pane, entry, true, "     └ ", winTag))
 		}
 	}
 
+	// ── Compose with optional highlight background ──
+	var b strings.Builder
+	if isCursor {
+		b.WriteString(m.padWithBg(line1, w, highlightBg))
+		for _, dl := range detailLines {
+			b.WriteString("\n")
+			b.WriteString(m.padWithBg(dl, w, highlightBg))
+		}
+	} else {
+		b.WriteString(line1)
+		for _, dl := range detailLines {
+			b.WriteString("\n")
+			b.WriteString(dl)
+		}
+	}
+	b.WriteString("\n")
+
 	return b.String()
+}
+
+// renderPaneDetail renders a single agent pane line with status indicator.
+func (m Model) renderPaneDetail(p tmux.Pane, entry sessionEntry, showConnector bool, prefix, winTag string) string {
+	panePath := tildefy(p.Path)
+	agentName, paneStatus := tmux.DetectAgent(p)
+	if agentName == "" {
+		agentName = friendlyName(p)
+	}
+
+	var indicator string
+	frame := pulseFrames[m.animFrame%len(pulseFrames)]
+
+	switch {
+	case paneStatus == tmux.AgentWorking:
+		indicator = workingStyle.Render(frame) + pathStyle.Render(" "+agentName+"  "+panePath)
+	case entry.notif != nil && entry.notif.Status == notify.StatusWaiting:
+		indicator = waitingStyle.Render("●") + pathStyle.Render(" "+agentName+"  "+panePath)
+	case entry.notif != nil && entry.notif.Status == notify.StatusDone:
+		indicator = doneStyle.Render("·") + pathStyle.Render(" "+agentName+"  "+panePath)
+	case paneStatus == tmux.AgentIdle:
+		indicator = pathStyle.Render("· "+agentName+"  "+panePath)
+	default:
+		indicator = pathStyle.Render("  "+agentName+"  "+panePath)
+	}
+
+	return pathStyle.Render(prefix) + indicator + pathStyle.Render(winTag)
+}
+
+func (m Model) padWithBg(content string, w int, bg lipgloss.Color) string {
+	contentWidth := lipgloss.Width(content)
+	padding := m.width - contentWidth
+	if padding < 0 {
+		padding = 0
+	}
+	// Replace every \x1b[0m (reset) with \x1b[0m\x1b[48;2;51;51;51m (reset then re-apply bg)
+	// This keeps the background alive through inner style resets
+	bgOn := "\x1b[48;2;51;51;51m"
+	patched := strings.ReplaceAll(content, "\x1b[0m", "\x1b[0m"+bgOn)
+	return bgOn + patched + strings.Repeat(" ", padding) + "\x1b[0m"
 }
 
 // ── Status badges ───────────────────────────────────────────────────
