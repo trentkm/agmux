@@ -220,6 +220,13 @@ func togglePopup(width, height string) error {
 		"-T", " ⬡ agents ",
 		"agmux", "popup",
 	)
+	if err != nil {
+		// Fallback: run the TUI inline when display-popup fails
+		// (e.g. iTerm2 tmux integration, no client context)
+		m := ui.NewModel()
+		p := tea.NewProgram(m, tea.WithAltScreen())
+		_, err = p.Run()
+	}
 	return err
 }
 
