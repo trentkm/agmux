@@ -13,11 +13,14 @@ import (
 	"github.com/trentkm/agmux/internal/ui"
 )
 
+var version = "dev"
+
 func main() {
 	rootCmd := &cobra.Command{
-		Use:   "agmux",
-		Short: "tmux workspace manager",
-		Long:  "A workspace manager for tmux with notifications and a visual sidebar.",
+		Use:     "agmux",
+		Short:   "tmux workspace manager",
+		Long:    "A workspace manager for tmux with notifications and a visual sidebar.",
+		Version: version,
 	}
 
 	// agmux popup — run the TUI directly (called by display-popup)
